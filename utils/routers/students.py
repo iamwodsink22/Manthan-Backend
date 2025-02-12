@@ -24,8 +24,18 @@ def to_dict(student_obj):
         return student_dict
 @student_router.get("/")
 def get_student(id:str,db:Session=Depends(get_db)):
-    student=db.query(Student).filter(Student.id==id).one()
-    predictions=db.query(StudentPredctions).filter(StudentPredctions.student_id==id).one()
+    student,cluster,risk,explanation,grades = (
+        db.query(
+            Student, 
+            StudentPredctions.cluster, 
+            StudentPredctions.risk, 
+            StudentPredctions.risk_explanation,
+            StudentGrades
+        )
+        .join(StudentPredctions, Student.id == StudentPredctions.student_id)
+        .join(StudentGrades, Student.id == StudentGrades.student_id)
+        .filter(Student.id == id)
+        .first()  )
     avg_section=db.query(func.avg(Student.avg_grades).label('section_avg_grades'),
                          func.avg(Student.extracurricular).label('section_avg_extracurricular'),
                          func.avg(Student.attendance).label('section_avg_attendance'),
@@ -41,9 +51,10 @@ def get_student(id:str,db:Session=Depends(get_db)):
         'avg_grades':student.avg_grades,
         'parent_name':student.parent_name,
         'address':student.address,
-        'cluster':predictions.cluster,
-        'at_risk':predictions.risk,
-        'explanation':predictions.risk_explanation,
+        'cluster':cluster,
+        'at_risk':risk,
+        'explanation':explanation,
+        'exam_data':[grades.first_exam,grades.second_exam,grades.third_exam,grades.fourth_exam],
         'section_avg_data':[avg_section.section_avg_grades,avg_section.section_avg_attendance,avg_section.section_avg_behavioral,avg_section.section_avg_extracurricular]
         
     }
