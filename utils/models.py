@@ -48,11 +48,18 @@ class StudentPredctions(Base):
     student_id=Column(ForeignKey(Student.id),unique=True,nullable=False)
     cluster=Column(String(50),nullable=True)
     risk=Column(Boolean,nullable=True)
-    summary=Column(String(200),nullable=True)
+    summary=Column(String(500),nullable=True)
     risk_explanation=Column(String(500),nullable=True)
     created_at=Column(DateTime,server_default=func.now(),nullable=True)
     
-
+class User(Base):
+    __tablename__='User'
+    id=Column(UUID(as_uuid=True),primary_key=True, default=uuid.uuid4)
+    name=Column(String(50),nullable=True)
+    email=Column(String(50),nullable=False)
+    password=Column(String(100),nullable=False)
+    college=Column(String(100),nullable=False)
+    super_admin=Column(Boolean,nullable=True,default=False)
     
     
     

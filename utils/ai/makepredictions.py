@@ -6,7 +6,9 @@ from langchain_core.prompts import PromptTemplate
 from pydantic import BaseModel
 from langchain_groq import ChatGroq
 import datetime
-from utils.models import Student,StudentPredctions,SessionLocal
+from utils.models import Student,StudentPredctions,SessionLocal,StudentGrades
+from utils.ai.tools import strengths_chain
+
 
 class RunPredictions():
     def __init__(self):
@@ -93,7 +95,12 @@ class RunPredictions():
         
     
 
-
+    def get_summary(self,cluster,risk,x):
+        try:
+            summary=strengths_chain.invoke({'cluster':cluster,'risk':risk,'report':x})
+            return summary.summary
+        except Exception as e:
+            raise RuntimeError(f'Error in generating summary, {e}')
     def get_explanation(self, x):
         """
         Generate a LIME explanation for the input data.
@@ -117,6 +124,25 @@ class RunPredictions():
         except Exception as e:
             raise RuntimeError(f"Error in get_explanation: {e}")
         
+    def get_report(self,x):
+        
+        try:
+            exams=self.db.query(StudentGrades).where(StudentGrades.student_id==x['id']).one()
+            return {
+                'name':x['name'],
+                'avg_grades':float(x['avg_grades']),
+                'behavioral':float(x['behavioral']),
+                'attendance':float(x['attendance']),
+                'extracurricular':float(x['extracurricular']),
+                'first_exam':exams.first_exam,
+                'second_exam':exams.second_exam,
+                'third_exam':exams.third_exam,
+                'fourth_exam':exams.fourth_exam
+                
+            }
+        except Exception as e:
+            raise RuntimeError(f"Error in generating report for summary,{e}")
+        
     def get_predictions(self,):
         
         preds=[]
@@ -130,7 +156,9 @@ class RunPredictions():
                 pred['cluster']=clusters[i]
                 pred['risk']=classes[i]==1
                 pred['student_id']=df.loc[i,'id']
+                report=self.get_report(df.iloc[i,:])
                 pred['risk_explanation']=str(self.get_explanation(df[self.columns].iloc[i,:].values))
+                pred['summary']=str(self.get_summary(clusters[i],classes[i]==1,report))
                 pred['created_at']=datetime.datetime.now()
                 preds.append(pred)
             return preds
@@ -146,6 +174,7 @@ class RunPredictions():
                 set_={
                     'cluster': pred['cluster'],
                     'risk': pred['risk'],
+                    'summary':pred['summary'],
                     'risk_explanation': pred['risk_explanation']
                 })
                 self.db.execute(execute)
@@ -164,6 +193,9 @@ class RunPredictions():
             raise RuntimeError(f"An Exception occured:{e}")
         finally:
             self.db.close()
+            
+        
+
         
         
         
