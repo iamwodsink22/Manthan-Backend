@@ -1,4 +1,4 @@
-from sqlalchemy import Column, Integer, String, Float, ForeignKey, Boolean, DateTime,UUID, Index,select
+from sqlalchemy import Column, Integer, String, Float, ForeignKey, Boolean, DateTime,UUID, Index,select, UniqueConstraint
 import uuid
 from sqlalchemy.orm import declarative_base
 from sqlalchemy.dialects.postgresql import TSVECTOR
@@ -8,15 +8,31 @@ from sqlalchemy.ext.hybrid import hybrid_property
 import datetime
 
 Base = declarative_base()
-class StudentGrades(Base):
-    __tablename__='StudentGrades'
-    id=Column(UUID(as_uuid=True),primary_key=True, default=uuid.uuid4)
-    student_id=Column(ForeignKey("Students.id"),unique=True,nullable=False)
-    first_exam = Column(Float, nullable=True)
-    second_exam = Column(Float, nullable=True)
-    third_exam = Column(Float, nullable=True)
-    fourth_exam = Column(Float, nullable=True)
-    student = relationship("Student", back_populates="student_grades")
+    
+class Subject(Base):
+    __tablename__ = 'Subjects'
+    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    grade = Column(Integer, nullable=False) 
+    name = Column(String, nullable=False)    
+    __table_args__ = (
+        UniqueConstraint('grade', 'name', name='uq_subject_grade_name'),
+        
+    )
+    
+class ExamScore(Base):
+    __tablename__ = 'ExamScores'
+    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    student_id = Column(ForeignKey("Students.id"), nullable=False)
+    subject_id = Column(ForeignKey("Subjects.id"), nullable=False)
+    exam_number = Column(Integer, nullable=False)  # 1, 2, 3, or 4
+    score = Column(Float, nullable=False)
+    
+    student = relationship("Student", back_populates="exam_scores")
+    subject = relationship("Subject")
+    
+    __table_args__ = (
+        UniqueConstraint('student_id', 'subject_id', 'exam_number', name='uq_student_subject_exam'),
+    )
 class Student(Base):
     __tablename__ = "Students"
 
@@ -36,7 +52,7 @@ class Student(Base):
     parent_email = Column(String, nullable=False)
     created_at = Column(DateTime, server_default=func.now())
     search_vector = Column(TSVECTOR, nullable=True)
-    student_grades = relationship("StudentGrades", back_populates="student",uselist=False)
+    exam_scores = relationship("ExamScore", back_populates="student")
     __table_args__ = (
         Index("search_idx", "search_vector", postgresql_using="gin"),  # Ensure index exists
     )
@@ -51,6 +67,19 @@ class StudentPredctions(Base):
     summary=Column(String(500),nullable=True)
     risk_explanation=Column(String(500),nullable=True)
     created_at=Column(DateTime,server_default=func.now(),nullable=True)
+    
+class SubjectAnalysis(Base):
+    __tablename__='SubjectAnalysis'
+    id=Column(UUID(as_uuid=True),primary_key=True, default=uuid.uuid4)
+    student_id=Column(ForeignKey(Student.id),nullable=False)
+    subject_id = Column(ForeignKey("Subjects.id"), nullable=False)
+    avg_marks=Column(Float,nullable=False)
+    analysis=Column(String(50),nullable=True)
+    subject = relationship("Subject")
+    __table_args__ = (
+        UniqueConstraint('student_id', 'subject_id', name='uq_student_subject'),
+    )
+    
     
 class User(Base):
     __tablename__='User'

@@ -1,13 +1,17 @@
 import joblib
 import pandas as pd
+import numpy as np
 from sqlalchemy.dialects.postgresql import insert
 from lime.lime_tabular import LimeTabularExplainer
 from langchain_core.prompts import PromptTemplate
 from pydantic import BaseModel
 from langchain_groq import ChatGroq
 import datetime
-from utils.models import Student,StudentPredctions,SessionLocal,StudentGrades
+from collections import defaultdict
+
+from utils.models import Student,StudentPredctions,SessionLocal,Subject,SubjectAnalysis
 from utils.ai.tools import strengths_chain
+from utils.routers.students import calculate_exam_avg
 
 
 class RunPredictions():
@@ -19,6 +23,7 @@ class RunPredictions():
         self.classifier_scaler=joblib.load('./utils/ai/models/classifier_scaler.joblib')
         self.columns = self.clusterer_scaler.feature_names_in_
         self.x_train=pd.read_csv('./utils/ai/models/x_train.csv')
+        self.exam_model=joblib.load('./utils/ai/models/exams.joblib')
         self.explainer = LimeTabularExplainer(
             training_data=self.x_train,
             feature_names=self.columns,
@@ -26,6 +31,11 @@ class RunPredictions():
             mode="classification",
             discretize_continuous=False
         )
+        self.pred_to_analysis={4:'Excel and Improving',
+                          3:'Improving Consistently',
+                          2:'Excels but declining',
+                          0:'Poor and declining',
+                          1:'Needs hard work'}
         self.cluster_map={
     0: 'Balanced but inconsistent',  
     1: 'Academically focused',     
@@ -40,11 +50,31 @@ class RunPredictions():
         
     
     def get_data(self):
-        result=self.db.query(Student).all()
-        data = [student.__dict__ for student in result]
+        students=self.db.query(Student).all()
+        students=students
+        exam_data=[]
+        for student in students:
+            student_dict = defaultdict(lambda: None)  # Default to None if no score
+            student_dict['id'] = student.id
+            student_subjects = []
+            subject_ids = []
+            
+            for score in student.exam_scores:
+                subject_name,subject_id = self.db.query(Subject.name,Subject.id).where(Subject.id == score.subject_id).first()
+                if subject_name not in student_subjects:
+                    student_subjects.append(subject_name)
+                if subject_id not in subject_ids:
+                    subject_ids.append(subject_id)
+                subject_index = student_subjects.index(subject_name) + 1 
+                column_name = f'exam{score.exam_number}_subject{subject_index}'
+                student_dict[column_name] = score.score
+            student_dict['subjects'] = student_subjects  
+            student_dict['subject_ids'] = subject_ids  
+            exam_data.append(student_dict)
+        data = [student.__dict__ for student in students]
         for record in data:
             record.pop('_sa_instance_state', None)
-        return pd.DataFrame(data)
+        return pd.merge(pd.DataFrame(data),pd.DataFrame(exam_data),on='id',how='inner')
     
     
     def validate_input(self, x):
@@ -127,17 +157,17 @@ class RunPredictions():
     def get_report(self,x):
         
         try:
-            exams=self.db.query(StudentGrades).where(StudentGrades.student_id==x['id']).one()
+            exams=calculate_exam_avg(self.db,x['id'])
             return {
                 'name':x['name'],
                 'avg_grades':float(x['avg_grades']),
                 'behavioral':float(x['behavioral']),
                 'attendance':float(x['attendance']),
                 'extracurricular':float(x['extracurricular']),
-                'first_exam':exams.first_exam,
-                'second_exam':exams.second_exam,
-                'third_exam':exams.third_exam,
-                'fourth_exam':exams.fourth_exam
+                'first_exam':exams[0],
+                'second_exam':exams[1],
+                'third_exam':exams[2],
+                'fourth_exam':exams[3]
                 
             }
         except Exception as e:
@@ -147,6 +177,8 @@ class RunPredictions():
         
         preds=[]
         df=self.get_data()
+        exam_data=df.iloc[:,17:]
+        
         data=df[self.columns].values
         clusters=self.get_cluster(data)
         classes=self.at_risk_classify(data)
@@ -156,9 +188,11 @@ class RunPredictions():
                 pred['cluster']=clusters[i]
                 pred['risk']=classes[i]==1
                 pred['student_id']=df.loc[i,'id']
-                report=self.get_report(df.iloc[i,:])
+                pred['subject_analysis']=self.ind_subject(exam_data.loc[i,:])
+                # report=self.get_report(df.iloc[i,:])
                 pred['risk_explanation']=str(self.get_explanation(df[self.columns].iloc[i,:].values))
-                pred['summary']=str(self.get_summary(clusters[i],classes[i]==1,report))
+                
+                # pred['summary']=str(self.get_summary(clusters[i],classes[i]==1,report))
                 pred['created_at']=datetime.datetime.now()
                 preds.append(pred)
             return preds
@@ -168,21 +202,58 @@ class RunPredictions():
     def insert_predictions(self,preds):
         try:
             for pred in preds:
-                execute=insert(StudentPredctions).values(pred)
+                student_pred_data = {
+                'student_id': pred['student_id'],
+                'cluster': pred['cluster'],
+                'risk': pred['risk'],
+                'risk_explanation': pred['risk_explanation'],
+                'created_at': pred['created_at']
+            }
+                execute=insert(StudentPredctions).values(**student_pred_data)
                 execute = execute.on_conflict_do_update(
                 index_elements=['student_id'],  
                 set_={
-                    'cluster': pred['cluster'],
-                    'risk': pred['risk'],
-                    'summary':pred['summary'],
-                    'risk_explanation': pred['risk_explanation']
+                    'cluster': student_pred_data['cluster'],
+                    'risk': student_pred_data['risk'],
+                    # 'summary':pred['summary'],
+                    'risk_explanation': student_pred_data['risk_explanation']
                 })
                 self.db.execute(execute)
+                for subject_name, analysis_data in pred['subject_analysis'].items():
+                    subject_entry = {
+                        'student_id': pred['student_id'],
+                        'subject_id': analysis_data['sub_id'],
+                        'avg_marks': float(analysis_data['avg_marks']),
+                        'analysis': analysis_data['risk_analysis']
+                    }
+                    stmt = insert(SubjectAnalysis).values(**subject_entry)
+                    stmt = stmt.on_conflict_do_update(
+                        constraint='uq_student_subject',
+                        set_={
+                            'avg_marks': subject_entry['avg_marks'],
+                            'analysis': subject_entry['analysis']
+                        }
+                    )
+                    self.db.execute(stmt)
             
             self.db.commit()
             
         except Exception as e:
             raise RuntimeError(f'An Exception occured while inserting predictions')
+        
+    def ind_subject(self,x):
+        pred_dict={}
+        subjects=x['subjects']
+        ids=x['subject_ids']
+        
+        for i in range(1,len(subjects)+1):
+            
+            sub=x.loc[[f'exam1_subject{i}', f'exam2_subject{i}', f'exam3_subject{i}', f'exam4_subject{i}']]
+            pred=self.exam_model.predict(sub.values.reshape(1,-1)/100)
+            pred_dict[subjects[i-1]]={'risk_analysis':self.pred_to_analysis[pred[0]],
+            'avg_marks':np.average(sub.values),'sub_id':ids[i-1]}
+        return pred_dict
+        
         
     
     def run_whole_inference(self):
