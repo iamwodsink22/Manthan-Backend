@@ -223,14 +223,14 @@ class RunPredictions():
                     subject_entry = {
                         'student_id': pred['student_id'],
                         'subject_id': analysis_data['sub_id'],
-                        'avg_marks': float(analysis_data['avg_marks']),
+                        'marks': str([round(float(i),2) for i in analysis_data['marks']]),
                         'analysis': analysis_data['risk_analysis']
                     }
                     stmt = insert(SubjectAnalysis).values(**subject_entry)
                     stmt = stmt.on_conflict_do_update(
                         constraint='uq_student_subject',
                         set_={
-                            'avg_marks': subject_entry['avg_marks'],
+                            'marks': str(subject_entry['marks']),
                             'analysis': subject_entry['analysis']
                         }
                     )
@@ -251,7 +251,7 @@ class RunPredictions():
             sub=x.loc[[f'exam1_subject{i}', f'exam2_subject{i}', f'exam3_subject{i}', f'exam4_subject{i}']]
             pred=self.exam_model.predict(sub.values.reshape(1,-1)/100)
             pred_dict[subjects[i-1]]={'risk_analysis':self.pred_to_analysis[pred[0]],
-            'avg_marks':np.average(sub.values),'sub_id':ids[i-1]}
+            'marks':list(sub.values),'sub_id':ids[i-1]}
         return pred_dict
         
         

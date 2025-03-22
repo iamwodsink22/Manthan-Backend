@@ -45,7 +45,7 @@ def get_subjectwise_data(session, student_id):
     for result in results:
         subject_name = result.subject.name  
         subjectwise_data[subject_name] = {
-            'avg_marks': result.avg_marks,
+            'avg_marks': result.marks,
             'analysis': result.analysis
         }
 

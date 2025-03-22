@@ -73,7 +73,7 @@ class SubjectAnalysis(Base):
     id=Column(UUID(as_uuid=True),primary_key=True, default=uuid.uuid4)
     student_id=Column(ForeignKey(Student.id),nullable=False)
     subject_id = Column(ForeignKey("Subjects.id"), nullable=False)
-    avg_marks=Column(Float,nullable=False)
+    marks=Column(String(100),nullable=True)
     analysis=Column(String(50),nullable=True)
     subject = relationship("Subject")
     __table_args__ = (
@@ -89,6 +89,44 @@ class User(Base):
     password=Column(String(100),nullable=False)
     college=Column(String(100),nullable=False)
     super_admin=Column(Boolean,nullable=True,default=False)
+    
+    
+class SectionAverage(Base):
+    __tablename__ = 'SectionAverages'
+    
+    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    grade = Column(Integer, nullable=False)
+    section = Column(String, nullable=False)
+    
+ 
+    avg_grades = Column(Float, nullable=True)  
+    avg_attendance = Column(Float, nullable=True)  
+    avg_behavioral = Column(Float, nullable=True)  
+    avg_extracurricular = Column(Float, nullable=True) 
+    
+   
+    subject_averages = relationship("SubjectAverage", back_populates="section_average", cascade="all, delete-orphan")
+    
+    created_at = Column(DateTime, server_default=func.now())
+    
+    __table_args__ = (
+        UniqueConstraint('grade', 'section', name='uq_grade_section'),
+    )
+
+class SubjectAverage(Base):
+    __tablename__ = 'SubjectAverages'
+    
+    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    subject_id = Column(ForeignKey('Subjects.id'), nullable=False)
+    section_average_id = Column(ForeignKey('SectionAverages.id'), nullable=False)
+    
+    avg_marks = Column(Float, nullable=True)  
+    subject = relationship("Subject")
+    section_average = relationship("SectionAverage", back_populates="subject_averages")
+    
+    __table_args__ = (
+        UniqueConstraint('subject_id', 'section_average_id', name='uq_subject_section'),
+    )
     
     
     
