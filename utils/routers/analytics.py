@@ -5,7 +5,7 @@ from sqlalchemy import func,select,case
 analytics_router=APIRouter()
 
 def get_top_5_high_risk_sections(db):
-    # Get all students with their risk status
+   
     results = (
         db.query(
             Student.grade,
@@ -16,7 +16,7 @@ def get_top_5_high_risk_sections(db):
         .all()
     )
     
-    # Process results in Python
+   
     section_stats = {}
     for grade, section, is_at_risk in results:
         key = (grade, section)
@@ -27,7 +27,7 @@ def get_top_5_high_risk_sections(db):
         if is_at_risk:
             section_stats[key]["at_risk"] += 1
     
-    # Calculate percentages and format
+    
     formatted_results = []
     for (grade, section), stats in section_stats.items():
         if stats["total"] > 0:

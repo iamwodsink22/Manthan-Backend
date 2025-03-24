@@ -1,9 +1,9 @@
-from sqlalchemy import Column, Integer, and_,String, case,Float, ForeignKey, Boolean, DateTime,select,func,desc,asc
+from sqlalchemy import Column, Integer, and_, String, case, Float, ForeignKey, Boolean, DateTime, select, func, desc, asc
 from sqlalchemy.orm import relationship
-from utils.models import Base, SessionLocal, SubjectAverage,SectionAverage
+from utils.models import Base, SessionLocal, SubjectAverage, SectionAverage
 from fastapi import APIRouter, Depends
-from sqlalchemy.orm import Session,lazyload,joinedload
-from utils.models import Student,StudentPredctions,ExamScore,Subject,SubjectAnalysis
+from sqlalchemy.orm import Session, lazyload, joinedload
+from utils.models import Student, StudentPredctions, ExamScore, Subject, SubjectAnalysis
 from collections import defaultdict
 import json
 import uuid
@@ -18,104 +18,80 @@ def get_db():
     finally:
         db.close()
         
-def calculate_exam_avg(session,student):
-    student = session.query(Student).where(Student.id==student).options(lazyload(Student.exam_scores)
-    ).one()
+def calculate_exam_avg(session, student):
+    student = session.query(Student).where(Student.id == student).options(lazyload(Student.exam_scores)).one()
     exam_averages = {1: [], 2: [], 3: [], 4: []}
     for score in student.exam_scores:
         exam_averages[score.exam_number].append(score.score)
         
-       
-        exam_means = []
-        for exam_num in [1, 2, 3, 4]:
-            if exam_averages[exam_num]:  
-                exam_mean = sum(exam_averages[exam_num]) / len(exam_averages[exam_num])
-                exam_means.append(round(exam_mean,2))
+    exam_means = [
+        round(sum(exam_averages[exam_num]) / len(exam_averages[exam_num]), 2) if exam_averages[exam_num] else None
+        for exam_num in [1, 2, 3, 4]
+    ]
     return exam_means
-    
-    
+
 def get_subjectwise_data(session, student_id):
-    # Fetch subject analysis data for the student along with the student details (grade and section)
     results = (
         session.query(SubjectAnalysis, Student.grade, Student.section)
-        .join(Student, Student.id == SubjectAnalysis.student_id)  # Join Student to get grade and section
+        .join(Student, Student.id == SubjectAnalysis.student_id)
         .filter(SubjectAnalysis.student_id == student_id)
         .all()
     )
-
     subjectwise_data = {}
 
     for result in results:
-        subject_analysis = result.SubjectAnalysis  # SubjectAnalysis object
-        grade = result.grade  # Student's grade from the join
-        section = result.section  # Student's section from the join
-
+        subject_analysis = result.SubjectAnalysis
+        grade, section = result.grade, result.section
         subject_name = subject_analysis.subject.name
 
-        # Fetch the section-wide average marks for the current subject
-        # section_avg_marks is assumed to be of type ARRAY in the SubjectAverage table
         section_avg_marks = (
             session.query(SubjectAverage.avg_marks)
             .join(SectionAverage, SectionAverage.id == SubjectAverage.section_average_id)
             .filter(
                 SubjectAverage.subject_id == subject_analysis.subject_id,
-                SectionAverage.grade == grade,  # Use the grade from the joined Student
-                SectionAverage.section == section  # Use the section from the joined Student
+                SectionAverage.grade == grade,
+                SectionAverage.section == section
             )
-            .first()  # Assuming we get one record with avg_marks for the subject, grade, and section
+            .first()
         )
+        section_avg_marks_list = section_avg_marks.avg_marks if section_avg_marks else [None, None, None, None]
 
-        # If no section average marks are found, set it to a default list
-        if section_avg_marks:
-            section_avg_marks_list = section_avg_marks.avg_marks  # Directly get the ARRAY of values
-        else:
-            section_avg_marks_list = [None, None, None, None]  # If no data is found, return None for all exams
-
-        # Create the final subjectwise data for this student
         subjectwise_data[subject_name] = {
-            'avg_marks': subject_analysis.marks,  # Marks for this subject for the student
-            'analysis': subject_analysis.analysis,  # Analysis for the subject
-            'section_avg_marks': section_avg_marks_list  # Array of section-wide average marks for the subject (for 4 exams)
+            'avg_marks': subject_analysis.marks,
+            'analysis': subject_analysis.analysis,
+            'section_avg_marks': section_avg_marks_list
         }
 
     return subjectwise_data
 
-
-
-        
-        
-    
-
 def to_dict(student_obj):
-        student_obj,_=student_obj
-        student_dict = {'id':str(student_obj.id),'img':student_obj.img,'avg_grades':student_obj.avg_grades,
-                        'behavioral':student_obj.behavioral,'extracurricular':student_obj.extracurricular,'attendance':student_obj.attendance,
-                        'avg_score':_,'name':student_obj.name}
-        
-        return student_dict
-    
-
-
+    student_obj, _ = student_obj
+    return {
+        'id': str(student_obj.id),
+        'img': student_obj.img,
+        'avg_grades': student_obj.avg_grades,
+        'behavioral': student_obj.behavioral,
+        'extracurricular': student_obj.extracurricular,
+        'attendance': student_obj.attendance,
+        'avg_score': _,
+        'name': student_obj.name
+    }
 
 @student_router.get("/")
 def get_student(id: str, db: Session = Depends(get_db)):
-    # Fetch the student and associated prediction data
     student, cluster, risk, explanation = (
         db.query(
             Student,
             StudentPredctions.cluster,
             StudentPredctions.risk,
-            StudentPredctions.risk_explanation,
+            StudentPredctions.risk_explanation
         )
         .join(StudentPredctions, Student.id == StudentPredctions.student_id)
         .filter(Student.id == id)
         .first()
     )
-    
-    # Fetch the exam averages (this function is assumed to be defined elsewhere)
     grades = calculate_exam_avg(db, student.id)
     
-    # Fetch the section averages from the SectionAverage table (modify based on relationship)
     avg_section = db.query(
         SectionAverage.avg_grades.label('section_avg_grades'),
         SectionAverage.avg_attendance.label('section_avg_attendance'),
@@ -124,24 +100,18 @@ def get_student(id: str, db: Session = Depends(get_db)):
     ).filter(
         SectionAverage.grade == student.grade,
         SectionAverage.section == student.section
-    ).one_or_none()  
+    ).one_or_none()
     
-    # If no section averages found, use a default value (for example: [None, None, None, None])
-    if avg_section:
-        section_avg_data = [
-            avg_section.section_avg_grades,
-            avg_section.section_avg_attendance,
-            avg_section.section_avg_behavioral,
-            avg_section.section_avg_extracurricular
-        ]
-    else:
-        section_avg_data = [None, None, None, None]  # Default when no section data is found
-    
-    # Fetch subject analysis data (subject-wide details)
+    section_avg_data = [
+        avg_section.section_avg_grades,
+        avg_section.section_avg_attendance,
+        avg_section.section_avg_behavioral,
+        avg_section.section_avg_extracurricular
+    ] if avg_section else [None, None, None, None]
+
     subject_analysis = get_subjectwise_data(db, id)
     
-    # Construct the response dictionary
-    return_dict = {
+    return {
         'name': student.name,
         'grade': student.grade,
         'section': student.section,
@@ -156,12 +126,8 @@ def get_student(id: str, db: Session = Depends(get_db)):
         'explanation': explanation,
         'exam_data': grades,
         'subject_analysis': json.dumps(subject_analysis),
-        'section_avg_data': section_avg_data  # Array of section averages for 4 exams
+        'section_avg_data': section_avg_data
     }
-    
-    return return_dict
-
-        
 
 @student_router.get("/search")
 def search_students(q: str, db: Session = Depends(get_db)):
@@ -172,17 +138,22 @@ def search_students(q: str, db: Session = Depends(get_db)):
     return results
 
 @student_router.get("/overall/top{n}")
-def get_overall_top_n(n:int,db:Session=Depends(get_db)):
-    ascending= db.query(Student,((Student.avg_grades+Student.attendance+Student.behavioral+Student.extracurricular)/4).label('average_score')).order_by(asc('average_score')).limit(n).all()
-    descending= db.query(Student,((Student.avg_grades+Student.attendance+Student.behavioral+Student.extracurricular)/4).label('average_score')).order_by(desc('average_score')).limit(n).all()
+def get_overall_top_n(n: int, db: Session = Depends(get_db)):
+    query = db.query(
+        Student,
+        ((Student.avg_grades + Student.attendance + Student.behavioral + Student.extracurricular) / 4).label('average_score')
+    ).order_by(desc('average_score')).limit(n)
+    
+    descending = query.all()
+    ascending = query.order_by(asc('average_score')).all()
+    
     return {
         "ascending": [to_dict(row) for row in ascending],
         "descending": [to_dict(row) for row in descending]
     }
-    
+
 @student_router.get("/overall/charts")
 def get_overall_charts(db: Session = Depends(get_db)):
-    
     exam_averages = (
         db.query(
             ExamScore.student_id,
@@ -192,59 +163,32 @@ def get_overall_charts(db: Session = Depends(get_db)):
         .group_by(ExamScore.student_id, ExamScore.exam_number)
         .subquery()
     )
-
-    # Step 2: Pivot exam averages into columns
     pivoted_exams = (
         db.query(
             exam_averages.c.student_id,
-            func.max(
-                case(
-                    (exam_averages.c.exam_number == 1, exam_averages.c.exam_avg),
-                    else_=None
-                )
-            ).label('first_exam'),
-            func.max(
-                case(
-                    (exam_averages.c.exam_number == 2, exam_averages.c.exam_avg),
-                    else_=None
-                )
-            ).label('second_exam'),
-            func.max(
-                case(
-                    (exam_averages.c.exam_number == 3, exam_averages.c.exam_avg),
-                    else_=None
-                )
-            ).label('third_exam'),
-            func.max(
-                case(
-                    (exam_averages.c.exam_number == 4, exam_averages.c.exam_avg),
-                    else_=None
-                )
-            ).label('fourth_exam')
+            *[
+                func.max(case((exam_averages.c.exam_number == num, exam_averages.c.exam_avg), else_=None)).label(f'{num}_exam')
+                for num in [1, 2, 3, 4]
+            ]
         )
         .group_by(exam_averages.c.student_id)
         .subquery()
     )
 
- 
     results = (
         db.query(
             Student,
             StudentPredctions.cluster,
             StudentPredctions.risk,
-            pivoted_exams.c.first_exam,
-            pivoted_exams.c.second_exam,
-            pivoted_exams.c.third_exam,
-            pivoted_exams.c.fourth_exam
+            *[pivoted_exams.c[f'{num}_exam'] for num in [1, 2, 3, 4]]
         )
         .outerjoin(StudentPredctions, Student.id == StudentPredctions.student_id)
         .outerjoin(pivoted_exams, Student.id == pivoted_exams.c.student_id)
         .all()
     )
 
-    whole_data = []
-    for student, cluster, risk, first, second, third, fourth in results:
-        whole_data.append({
+    whole_data = [
+        {
             'name': student.name,
             'grade': student.grade,
             'section': student.section,
@@ -255,11 +199,13 @@ def get_overall_charts(db: Session = Depends(get_db)):
             'behavioral': student.behavioral,
             'attendance': student.attendance,
             'extracurricular': student.extracurricular,
-            'first_exam': round(float(first or 0.0), 2),
-            'second_exam': round(float(second or 0.0), 2),
-            'third_exam': round(float(third or 0.0), 2),
-            'fourth_exam': round(float(fourth or 0.0), 2)
-        })
+            **{
+                f'{exam}_exam': round(float(exam_value or 0.0), 2)
+                for exam, exam_value in zip([1, 2, 3, 4], [first, second, third, fourth])
+            }
+        }
+        for student, cluster, risk, first, second, third, fourth in results
+    ]
     
     return {'data': whole_data}
 
