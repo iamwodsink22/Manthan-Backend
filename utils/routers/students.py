@@ -142,10 +142,10 @@ def get_overall_top_n(n: int, db: Session = Depends(get_db)):
     query = db.query(
         Student,
         ((Student.avg_grades + Student.attendance + Student.behavioral + Student.extracurricular) / 4).label('average_score')
-    ).order_by(desc('average_score')).limit(n)
+    )
     
-    descending = query.all()
-    ascending = query.order_by(asc('average_score')).all()
+    descending = query.order_by(desc('average_score')).limit(n)
+    ascending = query.order_by(asc('average_score')).limit(n)
     
     return {
         "ascending": [to_dict(row) for row in ascending],
@@ -180,7 +180,7 @@ def get_overall_charts(db: Session = Depends(get_db)):
             Student,
             StudentPredctions.cluster,
             StudentPredctions.risk,
-            *[pivoted_exams.c[f'{num}_exam'] for num in [1, 2, 3, 4]]
+            *[pivoted_exams.c[f'{num}_exam'] for num in [1,2,3,4]]
         )
         .outerjoin(StudentPredctions, Student.id == StudentPredctions.student_id)
         .outerjoin(pivoted_exams, Student.id == pivoted_exams.c.student_id)
@@ -201,7 +201,7 @@ def get_overall_charts(db: Session = Depends(get_db)):
             'extracurricular': student.extracurricular,
             **{
                 f'{exam}_exam': round(float(exam_value or 0.0), 2)
-                for exam, exam_value in zip([1, 2, 3, 4], [first, second, third, fourth])
+                for exam, exam_value in zip(['first', 'second', 'third', 'fourth'], [first, second, third, fourth])
             }
         }
         for student, cluster, risk, first, second, third, fourth in results
