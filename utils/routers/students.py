@@ -1,12 +1,14 @@
 from sqlalchemy import Column, Integer, and_,String, case,Float, ForeignKey, Boolean, DateTime,select,func,desc,asc
 from sqlalchemy.orm import relationship
-from utils.models import Base, SessionLocal
+from utils.models import Base, SessionLocal, SubjectAverage,SectionAverage
 from fastapi import APIRouter, Depends
 from sqlalchemy.orm import Session,lazyload,joinedload
 from utils.models import Student,StudentPredctions,ExamScore,Subject,SubjectAnalysis
 from collections import defaultdict
 import json
 import uuid
+from sqlalchemy.orm import joinedload
+from sqlalchemy import func
 student_router = APIRouter()
 
 def get_db():
@@ -33,23 +35,53 @@ def calculate_exam_avg(session,student):
     
     
 def get_subjectwise_data(session, student_id):
+    # Fetch subject analysis data for the student along with the student details (grade and section)
     results = (
-        session.query(SubjectAnalysis)
-        .options(joinedload(SubjectAnalysis.subject))  
+        session.query(SubjectAnalysis, Student.grade, Student.section)
+        .join(Student, Student.id == SubjectAnalysis.student_id)  # Join Student to get grade and section
         .filter(SubjectAnalysis.student_id == student_id)
         .all()
     )
 
-   
     subjectwise_data = {}
+
     for result in results:
-        subject_name = result.subject.name  
+        subject_analysis = result.SubjectAnalysis  # SubjectAnalysis object
+        grade = result.grade  # Student's grade from the join
+        section = result.section  # Student's section from the join
+
+        subject_name = subject_analysis.subject.name
+
+        # Fetch the section-wide average marks for the current subject
+        # section_avg_marks is assumed to be of type ARRAY in the SubjectAverage table
+        section_avg_marks = (
+            session.query(SubjectAverage.avg_marks)
+            .join(SectionAverage, SectionAverage.id == SubjectAverage.section_average_id)
+            .filter(
+                SubjectAverage.subject_id == subject_analysis.subject_id,
+                SectionAverage.grade == grade,  # Use the grade from the joined Student
+                SectionAverage.section == section  # Use the section from the joined Student
+            )
+            .first()  # Assuming we get one record with avg_marks for the subject, grade, and section
+        )
+
+        # If no section average marks are found, set it to a default list
+        if section_avg_marks:
+            section_avg_marks_list = section_avg_marks.avg_marks  # Directly get the ARRAY of values
+        else:
+            section_avg_marks_list = [None, None, None, None]  # If no data is found, return None for all exams
+
+        # Create the final subjectwise data for this student
         subjectwise_data[subject_name] = {
-            'avg_marks': result.marks,
-            'analysis': result.analysis
+            'avg_marks': subject_analysis.marks,  # Marks for this subject for the student
+            'analysis': subject_analysis.analysis,  # Analysis for the subject
+            'section_avg_marks': section_avg_marks_list  # Array of section-wide average marks for the subject (for 4 exams)
         }
 
     return subjectwise_data
+
+
+
         
         
     
@@ -63,47 +95,72 @@ def to_dict(student_obj):
         return student_dict
     
 
+
+
 @student_router.get("/")
-def get_student(id:str,db:Session=Depends(get_db)):
-    student,cluster,risk,explanation = (
+def get_student(id: str, db: Session = Depends(get_db)):
+    # Fetch the student and associated prediction data
+    student, cluster, risk, explanation = (
         db.query(
-            Student, 
-            StudentPredctions.cluster, 
-            StudentPredctions.risk, 
+            Student,
+            StudentPredctions.cluster,
+            StudentPredctions.risk,
             StudentPredctions.risk_explanation,
-           
         )
         .join(StudentPredctions, Student.id == StudentPredctions.student_id)
-        
         .filter(Student.id == id)
-        .first()  )
-    grades=calculate_exam_avg(db,student.id)
-    avg_section=db.query(func.avg(Student.avg_grades).label('section_avg_grades'),
-                         func.avg(Student.extracurricular).label('section_avg_extracurricular'),
-                         func.avg(Student.attendance).label('section_avg_attendance'),
-                         func.avg(Student.behavioral).label('section_avg_behavioral'),
-                                  ).where(Student.section==student.section).one()
+        .first()
+    )
     
-    subject_analysis=get_subjectwise_data(db,id)
-    return_dict={
-        'name':student.name,
-        'grade':student.grade,
-        'section':student.section,
-        'attendance':student.attendance,
-        'behavioral':student.behavioral,
-        'extracurricular':student.extracurricular,
-        'avg_grades':student.avg_grades,
-        'parent_name':student.parent_name,
-        'address':student.address,
-        'cluster':cluster,
-        'at_risk':risk,
-        'explanation':explanation,
-        'exam_data':grades,
-        'subject_analysis':json.dumps(subject_analysis),
-        'section_avg_data':[avg_section.section_avg_grades,avg_section.section_avg_attendance,avg_section.section_avg_behavioral,avg_section.section_avg_extracurricular]
-        
+    # Fetch the exam averages (this function is assumed to be defined elsewhere)
+    grades = calculate_exam_avg(db, student.id)
+    
+    # Fetch the section averages from the SectionAverage table (modify based on relationship)
+    avg_section = db.query(
+        SectionAverage.avg_grades.label('section_avg_grades'),
+        SectionAverage.avg_attendance.label('section_avg_attendance'),
+        SectionAverage.avg_behavioral.label('section_avg_behavioral'),
+        SectionAverage.avg_extracurricular.label('section_avg_extracurricular')
+    ).filter(
+        SectionAverage.grade == student.grade,
+        SectionAverage.section == student.section
+    ).one_or_none()  
+    
+    # If no section averages found, use a default value (for example: [None, None, None, None])
+    if avg_section:
+        section_avg_data = [
+            avg_section.section_avg_grades,
+            avg_section.section_avg_attendance,
+            avg_section.section_avg_behavioral,
+            avg_section.section_avg_extracurricular
+        ]
+    else:
+        section_avg_data = [None, None, None, None]  # Default when no section data is found
+    
+    # Fetch subject analysis data (subject-wide details)
+    subject_analysis = get_subjectwise_data(db, id)
+    
+    # Construct the response dictionary
+    return_dict = {
+        'name': student.name,
+        'grade': student.grade,
+        'section': student.section,
+        'attendance': student.attendance,
+        'behavioral': student.behavioral,
+        'extracurricular': student.extracurricular,
+        'avg_grades': student.avg_grades,
+        'parent_name': student.parent_name,
+        'address': student.address,
+        'cluster': cluster,
+        'at_risk': risk,
+        'explanation': explanation,
+        'exam_data': grades,
+        'subject_analysis': json.dumps(subject_analysis),
+        'section_avg_data': section_avg_data  # Array of section averages for 4 exams
     }
+    
     return return_dict
+
         
 
 @student_router.get("/search")
